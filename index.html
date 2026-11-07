@@ -59,6 +59,27 @@ main{max-width:560px;margin:0 auto;padding:16px}
 .row .num{color:var(--muted);font-size:13px}
 .row .chips{justify-content:flex-start;margin-left:auto;flex:none}
 .nomatch{padding:24px;text-align:center;color:var(--muted)}
+#result:focus{outline:none}
+#battle{position:fixed;inset:0;z-index:10;background:radial-gradient(circle at 50% 45%,#2b3a8c,#0c1024 75%);color:#fff;display:flex;flex-direction:column;align-items:center;padding:calc(12px + env(safe-area-inset-top)) 16px calc(14px + env(safe-area-inset-bottom));overflow:hidden;cursor:pointer;user-select:none;-webkit-user-select:none}
+#battle[hidden]{display:none}
+.arena{position:relative;flex:1;width:100%;max-width:520px;min-height:0;display:flex;flex-direction:column;justify-content:space-evenly}
+.fx{display:flex;align-items:center;gap:10px}
+.fx.top{flex-direction:row-reverse}
+.mon{position:relative;flex:none;width:min(44vw,190px);height:min(44vw,190px);display:flex;align-items:center;justify-content:center}
+.mon img{width:100%;height:100%;object-fit:contain;opacity:0;filter:drop-shadow(0 6px 10px #0009)}
+.burst{position:absolute;inset:8%;border-radius:50%;opacity:0;pointer-events:none}
+.plate{flex:1;min-width:0;background:#ffffff1f;border:1px solid #ffffff33;border-radius:12px;padding:9px 11px}
+.plate b{display:block;font-size:15px;line-height:1.2;margin-bottom:6px;overflow-wrap:anywhere}
+.hp{height:10px;border-radius:99px;background:#0007;overflow:hidden}
+.hp i{display:block;height:100%;width:100%;border-radius:99px;background:#4cd98f;transition:width .3s ease-out,background-color .3s}
+.versus{position:absolute;left:50%;top:50%;margin:-32px 0 0 -60px;width:120px;text-align:center;font-size:52px;line-height:64px;font-weight:900;font-style:italic;color:#ffd84d;text-shadow:0 3px 0 #b5491a,0 6px 14px #000a;opacity:0;pointer-events:none}
+.saying{width:100%;max-width:520px;min-height:76px;background:#0b0f26e6;border:2px solid #ffffff40;border-radius:14px;padding:11px 14px;font-size:17px;font-weight:600;line-height:1.3}
+.saying span{display:block;color:#ffd84d}
+.battlefoot{width:100%;max-width:520px;display:flex;justify-content:space-between;align-items:center;margin-top:8px;font-size:14px;min-height:44px}
+.ff{color:#ffd84d;font-weight:700}
+#skip{background:none;border:0;color:#fff;font-weight:600;padding:10px 0 10px 16px;margin-left:auto}
+#confetti{position:fixed;inset:0;z-index:9;overflow:hidden;pointer-events:none}
+#confetti i{position:absolute;top:-16px;width:9px;height:14px;border-radius:2px}
 </style>
 </head>
 <body>
@@ -73,9 +94,10 @@ main{max-width:560px;margin:0 auto;padding:16px}
     <button id="random">Surprise me</button>
     <button id="swap" hidden>Swap sides</button>
   </div>
-  <div id="result" aria-live="polite"></div>
+  <div id="result" aria-live="polite" tabindex="-1"></div>
   <p class="note">A prediction, not an official result: both are level 50, and each has a standard set of up to four attacks. It uses whichever one works best against this opponent. Abilities, items and status effects aren't counted. Unofficial fan project, not affiliated with Nintendo or The Pokémon Company.</p>
 </main>
+<div id="battle" role="dialog" aria-label="Battle" aria-modal="true" hidden></div>
 <div id="picker" role="dialog" aria-label="Choose a Pokémon">
   <div class="searchbar"><input id="search" type="search" placeholder="Search by name or number" autocomplete="off"><button id="close">Cancel</button></div>
   <div id="list"></div>
@@ -110,18 +132,25 @@ function bestMove(a,d){
   return best;
 }
 function rng(seed){return()=>{seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
-function fight(F,M,r){
+function fight(F,M,r,log){
   let hp=[F[0].hp,F[1].hp];
   for(let turn=0;turn<300;turn++){
     const first=F[0].spe===F[1].spe?(r()<.5?0:1):(F[0].spe>F[1].spe?0:1);
     for(const i of[first,1-first]){
       const j=1-i,m=M[i];
+      let hit=false,crit=false;
       if(r()*100<m.acc){
-        const crit=r()<1/24?1.5:1;
-        hp[j]-=Math.max(1,Math.floor(baseDamage(F[i],F[j],m)*(.85+r()*.15)*crit));
+        const mult=r()<1/24?1.5:1;
+        hp[j]-=Math.max(1,Math.floor(baseDamage(F[i],F[j],m)*(.85+r()*.15)*mult));
+        hit=true;crit=mult>1;
       }
+      if(log)log.push({i,hit,crit,hp:[hp[0],hp[1]]});
       if(hp[j]<=0)return i;
-      if(m===STRUGGLE){hp[i]-=Math.max(1,Math.floor(F[i].hp/4));if(hp[i]<=0)return j}
+      if(m===STRUGGLE){
+        hp[i]-=Math.max(1,Math.floor(F[i].hp/4));
+        if(log)log.push({i,recoil:true,hp:[hp[0],hp[1]]});
+        if(hp[i]<=0)return j;
+      }
     }
   }
   return -1;
@@ -133,7 +162,11 @@ function predict(a,b){
   const wins=[0,0],N=2000;
   for(let k=0;k<N;k++){const w=fight(F,M,r);if(w>=0)wins[w]++}
   const hits=[0,1].map(i=>{const avg=baseDamage(F[i],F[1-i],M[i])*.925;return Math.max(1,Math.ceil(F[1-i].hp/avg))});
-  return{F,M,hits,pct:[wins[0]/N*100,wins[1]/N*100]};
+  // Keep one fight won by the predicted winner, so the animation always agrees with the result.
+  const w=wins[0]>=wins[1]?0:1;
+  let replay=null;
+  for(let k=0;k<300&&!replay&&wins[w]>0;k++){const log=[];if(fight(F,M,r,log)===w)replay=log}
+  return{F,M,hits,w,replay,pct:[wins[0]/N*100,wins[1]/N*100]};
 }
 
 /* ---- Screen ---- */
@@ -161,12 +194,137 @@ function sideCard(R,i){
   const set=f.moves.map(x=>`<span class="move${x===m?" used":""}"><i style="background:${TYPE_COLORS[DATA.types[x.type]]}"></i>${esc(x.name)}</span>`).join("");
   return`<section class="side"><h3>${n}</h3><ul>${items.map(x=>`<li>${x}</li>`).join("")}</ul>${set&&`<div class="moves" aria-label="Moveset">${set}</div>`}</section>`;
 }
-function show(){
+/* ---- Battle animation ---- */
+const battle=document.getElementById("battle");
+let battleRun=null;
+const skipBattle=()=>{if(battleRun&&!battleRun.skipped){battleRun.skipped=true;if(battleRun.wake)battleRun.wake()}};
+battle.onclick=skipBattle;
+document.addEventListener("keydown",e=>{if(e.key==="Escape")skipBattle()});
+function hitNote(R,ev){
+  if(ev.recoil)return"";
+  if(!ev.hit)return"But it missed!";
+  const x=eff(R.M[ev.i].type,R.F[1-ev.i].types),notes=[];
+  if(ev.crit)notes.push("A critical hit!");
+  if(x===0)notes.push("It barely did anything...");
+  else if(x>=2)notes.push("It's super effective!");
+  else if(x<1)notes.push("It's not very effective...");
+  return notes.join(" ");
+}
+function battleSteps(log){
+  // Very long fights show every few actions, so the whole thing stays short. The last action always plays.
+  const stride=Math.ceil(log.length/14);
+  const steps=log.filter((ev,k)=>k%stride===0||k===log.length-1);
+  return{steps,fast:stride>1,ms:Math.min(850,Math.max(380,5000/steps.length))};
+}
+async function playBattle(R){
+  const run=battleRun={skipped:false,wake:null};
+  const wait=ms=>new Promise(res=>{
+    if(run.skipped)return res();
+    const t=setTimeout(()=>{run.wake=null;res()},ms);
+    run.wake=()=>{clearTimeout(t);run.wake=null;res()};
+  });
+  const anim=(el,frames,ms,opts)=>el.animate(frames,Object.assign({duration:ms,easing:"ease-out"},opts));
+  const names=R.F.map(f=>esc(f.p.name));
+  const side=i=>`<div class="fx ${i?"top":"bottom"}" id="fx${i}"><div class="mon"><img src="${art(R.F[i].p.id)}" alt="${names[i]}" onerror="this.onerror=null;this.src='${sprite(R.F[i].p.id)}'"><div class="burst"></div></div><div class="plate"><b>${names[i]}</b><div class="hp"><i></i></div></div></div>`;
+  battle.innerHTML=`<div class="arena">${side(1)}<div class="versus">VS</div>${side(0)}</div><div class="saying" role="status"></div><div class="battlefoot"><span class="ff"></span><button id="skip">Tap to skip</button></div>`;
+  battle.hidden=false;
+  document.getElementById("skip").focus({preventScroll:true});
+  const q=s=>battle.querySelector(s),mon=i=>q(`#fx${i} .mon`),img=i=>q(`#fx${i} img`);
+  const say=(line,note)=>{q(".saying").innerHTML=line+(note?`<span>${note}</span>`:"")};
+  const setHp=hp=>[0,1].forEach(i=>{
+    const left=Math.max(0,hp[i])/R.F[i].hp,bar=q(`#fx${i} .hp i`);
+    bar.style.width=left*100+"%";
+    bar.style.backgroundColor=left>.5?"#4cd98f":left>.2?"#ffc93c":"#ff5c4d";
+  });
+  const shake=(i,ms)=>anim(mon(i),[0,-10,10,-7,7,0].map(x=>({transform:`translateX(${x}px)`})),ms,{easing:"linear"});
+  const lunge=(i,ms)=>{const d=i?[-34,26]:[34,-26];anim(mon(i),[{transform:"none"},{transform:`translate(${d[0]}px,${d[1]}px) scale(1.06)`,offset:.4},{transform:"none"}],ms)};
+  const burst=(i,type)=>{
+    const b=q(`#fx${i} .burst`);
+    b.style.background=`radial-gradient(circle,#fff 0,${TYPE_COLORS[DATA.types[type]]||"#fff"} 45%,transparent 72%)`;
+    anim(b,[{opacity:.95,transform:"scale(.3)"},{opacity:0,transform:"scale(1.35)"}],340);
+  };
+
+  // Give the artwork a moment to load, so nobody fights invisibly.
+  await Promise.race([Promise.all([0,1].map(i=>img(i).decode().catch(()=>{}))),wait(1500)]);
+  if(!run.skipped){
+    [0,1].forEach(i=>anim(img(i),[{opacity:0,transform:`translateX(${i?70:-70}%)`},{opacity:1,transform:"none"}],480,{fill:"both"}));
+    anim(q(".versus"),[{opacity:0,transform:"scale(3)"},{opacity:1,transform:"scale(1)",offset:.35},{opacity:1,transform:"scale(1)",offset:.8},{opacity:0,transform:"scale(1.2)"}],1050,{fill:"both"});
+    await wait(1050);
+  }
+  const copier=R.F.findIndex(f=>f.copied);
+  if(copier>=0&&!run.skipped){
+    say(`${names[copier]} transformed into ${names[1-copier]}!`);
+    img(copier).src=art(R.F[1-copier].p.id);
+    anim(img(copier),[{transform:"scale(.6)"},{transform:"none"}],300);
+    await wait(800);
+  }
+  const{steps,fast,ms}=battleSteps(R.replay);
+  if(fast)q(".ff").textContent="Fast-forwarding";
+  for(const ev of steps){
+    if(run.skipped)break;
+    const i=ev.i,j=1-i,m=R.M[i];
+    if(ev.recoil){
+      say(`${names[i]} is hurt by recoil!`);
+      shake(i,260);setHp(ev.hp);
+      await wait(ms*.8);
+      continue;
+    }
+    say(`${names[i]} used ${esc(m.name)}!`);
+    lunge(i,Math.min(ms*.7,480));
+    await wait(ms*.35);
+    if(run.skipped)break;
+    say(`${names[i]} used ${esc(m.name)}!`,hitNote(R,ev));
+    if(ev.hit){burst(j,m.type);shake(j,280);setHp(ev.hp)}
+    else anim(mon(j),[{transform:"none"},{transform:`translateX(${j?26:-26}px)`,offset:.5},{transform:"none"}],300);
+    await wait(ms*.65);
+  }
+  if(!run.skipped){
+    const loser=1-R.w;
+    say(`${names[loser]} fainted!`);
+    anim(img(loser),[{opacity:1,transform:"none"},{opacity:0,transform:"translateY(45%) scale(.85)"}],600,{fill:"both"});
+    await wait(900);
+  }
+  if(!run.skipped){
+    anim(battle,[{opacity:1},{opacity:0}],250,{fill:"both"});
+    await wait(250);
+  }
+  battle.getAnimations({subtree:true}).forEach(a=>a.cancel());
+  battle.hidden=true;battle.innerHTML="";battleRun=null;
+}
+function celebrate(R){
+  const f=R.F[R.w].p,box=document.getElementById("result");
+  const banner=box.querySelector(".banner img");
+  if(banner)banner.animate([{transform:"scale(.3)",opacity:0},{transform:"scale(1.12)",opacity:1,offset:.65},{transform:"none",opacity:1}],{duration:520,easing:"ease-out"});
+  const colors=[...f.types.map(t=>TYPE_COLORS[DATA.types[t]]),"#ffd84d","#ffffff"];
+  const layer=document.createElement("div");
+  layer.id="confetti";
+  document.body.appendChild(layer);
+  const falls=[];
+  for(let k=0;k<44;k++){
+    const c=document.createElement("i");
+    c.style.left=Math.random()*100+"%";
+    c.style.background=colors[k%colors.length];
+    layer.appendChild(c);
+    const drift=(Math.random()-.5)*120;
+    falls.push(c.animate([{transform:"translate(0,0) rotate(0)"},{transform:`translate(${drift}px,calc(100vh + 32px)) rotate(${360+Math.random()*540}deg)`}],{duration:1300+Math.random()*1100,delay:Math.random()*350,easing:"cubic-bezier(.3,.5,.6,1)",fill:"both"}).finished);
+  }
+  Promise.all(falls).finally(()=>layer.remove());
+}
+function show(animate){
   document.getElementById("swap").hidden=!(picks[0]&&picks[1]);
   const box=document.getElementById("result");
   if(!(picks[0]&&picks[1])){box.innerHTML="";return}
   const R=predict(picks[0],picks[1]);
-  const w=R.pct[0]>=R.pct[1]?0:1,pc=R.pct[w],win=R.F[w].p;
+  const mirror=picks[0].id===picks[1].id;
+  const calm=matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if(animate===true&&R.replay&&!mirror&&!calm){
+    box.innerHTML="";
+    playBattle(R).then(()=>{renderResult(R);box.focus({preventScroll:true});celebrate(R)});
+  }else renderResult(R);
+}
+function renderResult(R){
+  const box=document.getElementById("result");
+  const w=R.w,pc=R.pct[w],win=R.F[w].p;
   const close=pc<55;
   const same=picks[0].id===picks[1].id;
   const head=same?"It's a tie!":close?`${esc(win.name)}, just barely!`:`${esc(win.name)} wins!`;
@@ -178,7 +336,7 @@ function show(){
   <div class="barlabels"><span>${esc(picks[0].name)} ${Math.round(R.pct[0])}%</span><span>${esc(picks[1].name)} ${Math.round(R.pct[1])}%</span></div></div>${sideCard(R,0)}${sideCard(R,1)}`;
   box.scrollIntoView({behavior:"smooth",block:"start"});
 }
-function setPick(i,p){picks[i]=p;renderPick(i);show()}
+function setPick(i,p){picks[i]=p;renderPick(i);show(true)}
 
 const picker=document.getElementById("picker"),list=document.getElementById("list"),search=document.getElementById("search");
 function renderList(q){
@@ -194,7 +352,7 @@ document.getElementById("pick1").onclick=()=>openPicker(1);
 document.getElementById("close").onclick=closePicker;
 search.oninput=()=>renderList(search.value);
 list.onclick=e=>{const b=e.target.closest(".row");if(!b)return;closePicker();setPick(active,POKES.find(p=>p.id===+b.dataset.id))};
-document.getElementById("random").onclick=()=>{const r=()=>POKES[Math.floor(Math.random()*POKES.length)];picks[0]=r();do{picks[1]=r()}while(picks[1]===picks[0]);renderPick(0);renderPick(1);show()};
+document.getElementById("random").onclick=()=>{const r=()=>POKES[Math.floor(Math.random()*POKES.length)];picks[0]=r();do{picks[1]=r()}while(picks[1]===picks[0]);renderPick(0);renderPick(1);show(true)};
 document.getElementById("swap").onclick=()=>{[picks[0],picks[1]]=[picks[1],picks[0]];renderPick(0);renderPick(1);show()};
 renderPick(0);renderPick(1);
 </script>
